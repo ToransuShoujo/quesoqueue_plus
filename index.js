@@ -191,6 +191,11 @@ const submitted_message = async (level, sender) => {
 // `message` is the full text of the message. `sender` is the username
 // of the person that sent the message.
 
+/**
+ * @param {string} message
+ * @param {import("tmi.js").Userstate} sender
+ * @param {Function} respond
+ */
 async function HandleMessage(message, sender, respond) {
   if (sender.username === undefined || message === undefined) {
     console.log("undefined data");
@@ -200,12 +205,27 @@ async function HandleMessage(message, sender, respond) {
   let args = message.split(" ");
   let cmd = args.shift();
   cmd = cmd.toLowerCase();
-  args = args.join(" ");
-  message = cmd + args;
-  if (args.length == 0) {
-    message = cmd;
-  } else {
-    message = cmd + " " + args;
+ 
+  // removes the bang at the beginning
+  const command = cmd.slice(1)
+  switch (command) {
+    case "open":
+      if (sender.isBroadcaster) {
+        queue_open = true;
+        respond("The queue is now open!")
+      }
+      break;
+    case "close":
+      if (sender.isBroadcaster) {
+        queue_open = false;
+        respond("The queue is now closed!")
+      }
+      break;
+    case "add":
+      addLevel(sender, message, respond);
+      break;
+    default:
+      break;
   }
 
   if (message == "!open" && sender.isBroadcaster) {
@@ -498,3 +518,33 @@ const chatbot_helper = chatbot.helper(
 );
 chatbot_helper.setup(HandleMessage);
 chatbot_helper.connect();
+
+/**
+ * @param {import("tmi.js").Userstate} sender
+ * @param {string} message
+ * @param {Function} respond
+ */
+function addLevel(sender, message, respond) {
+  if (queue_open || sender.isBroadcaster) {
+    let level_code = get_remainder(message.toUpperCase());
+    if (settings.custom_codes_enabled) {
+      let customCodesMap = new Map(
+        JSON.parse(fs.readFileSync("./customCodes.json"))
+      );
+      let customNames = Array.from(customCodesMap.keys());
+      let customCodes = Array.from(customCodesMap.values());
+      let codeMatch = customNames
+        .map((a) => a.toUpperCase())
+        .indexOf(level_code);
+      if (codeMatch !== -1) {
+        level_code = customCodes[codeMatch];
+      }
+    }
+    respond(
+      quesoqueue.add(Level(level_code, sender.displayName, sender.username))
+    );
+  } else {
+    respond("Sorry, the queue is closed right now.");
+  }
+}
+
