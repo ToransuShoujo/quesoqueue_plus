@@ -13,16 +13,18 @@ quesoqueue.load();
 /** @type {import("./commandTypes.js").commandMapping} */
 const dummyMapping = {}
 dummyMapping['add'] = addLevel
-/** @type {{[key: string]: string}} */
+/** @type {{[twitchCommand: string]: string}} */
 const aliases = {
-  push: 'add'
+  push: 'add',
+  add: 'add'
 }
 
 /**
  * @param {import("tmi.js").Userstate} sender
+ * @param {(message: string) => void} respond
  * @param {string[]} args
  */
-function addLevel(sender, args) {
+function addLevel(sender, respond, args) {
   if (queue_open || sender.isBroadcaster) {
     let [level_code] = args.map(el => el.toUpperCase())
     if (settings.custom_codes_enabled) {
@@ -33,9 +35,9 @@ function addLevel(sender, args) {
         level_code = customCodesMap.get(level_code)
       }
     }
-    return quesoqueue.add(Level(level_code, sender.displayName, sender.username))
+    respond(quesoqueue.add(Level(level_code, sender.displayName, sender.username)))
   } else {
-    return "Sorry, the queue is closed right now."
+    respond("Sorry, the queue is closed right now.")
   }
 }
 
@@ -223,7 +225,7 @@ const submitted_message = async (level, sender) => {
 /**
  * @param {string} message
  * @param {import("tmi.js").Userstate} sender
- * @param {Function} respond
+ * @param {(message: string) => void} respond
  */
 async function HandleMessage(message, sender, respond) {
   if (sender.username === undefined || message === undefined) {
@@ -236,10 +238,10 @@ async function HandleMessage(message, sender, respond) {
   cmd = cmd.toLowerCase();
  
   // removes the bang at the beginning
-  let command = cmd.slice(1)
-  const fallback = () => `!${command} is not a valid command`
-  const func = dummyMapping?.[command] ?? dummyMapping?.[aliases?.[command]] ?? fallback
-  respond(func(sender,args))
+  let commandName = cmd.slice(1)
+  const fallback = () => null
+  const command = dummyMapping?.[aliases?.[commandName]] ?? fallback
+  command(sender, respond, args)
 
   if (message == "!open" && sender.isBroadcaster) {
     queue_open = true;
