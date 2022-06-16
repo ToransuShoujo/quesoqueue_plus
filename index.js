@@ -13,6 +13,10 @@ quesoqueue.load();
 /** @type {import("./commandTypes.js").commandMapping} */
 const dummyMapping = {}
 dummyMapping['add'] = addLevel
+/** @type {{[key: string]: string}} */
+const aliases = {
+  push: 'add'
+}
 
 /**
  * @param {import("tmi.js").Userstate} sender
@@ -232,10 +236,10 @@ async function HandleMessage(message, sender, respond) {
   cmd = cmd.toLowerCase();
  
   // removes the bang at the beginning
-  const command = cmd.slice(1)
-  if (Object.keys(dummyMapping).includes(command)) {
-    respond(dummyMapping[command](sender, args))
-  }
+  let command = cmd.slice(1)
+  const fallback = () => `!${command} is not a valid command`
+  const func = dummyMapping?.[command] ?? dummyMapping?.[aliases?.[command]] ?? fallback
+  respond(func(sender,args))
 
   if (message == "!open" && sender.isBroadcaster) {
     queue_open = true;
