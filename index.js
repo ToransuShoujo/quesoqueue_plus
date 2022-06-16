@@ -10,6 +10,31 @@ gracefulFs.gracefulify(fs)
 
 quesoqueue.load();
 
+/** @type {import("./commandTypes.js").commandMapping} */
+const dummyMapping = {}
+dummyMapping['add'] = addLevel
+
+/**
+ * @param {import("tmi.js").Userstate} sender
+ * @param {string[]} args
+ */
+function addLevel(sender, args) {
+  if (queue_open || sender.isBroadcaster) {
+    let [level_code] = args.map(el => el.toUpperCase())
+    if (settings.custom_codes_enabled) {
+      let customCodesMap = new Map(
+        JSON.parse(fs.readFileSync("./customCodes.json", 'utf8'))
+      );
+      if (customCodesMap.has(level_code)) {
+        level_code = customCodesMap.get(level_code)
+      }
+    }
+    return quesoqueue.add(Level(level_code, sender.displayName, sender.username))
+  } else {
+    return "Sorry, the queue is closed right now."
+  }
+}
+
 var queue_open = settings.start_open;
 var selection_iter = 0;
 let level_timer;
@@ -208,24 +233,8 @@ async function HandleMessage(message, sender, respond) {
  
   // removes the bang at the beginning
   const command = cmd.slice(1)
-  switch (command) {
-    case "open":
-      if (sender.isBroadcaster) {
-        queue_open = true;
-        respond("The queue is now open!")
-      }
-      break;
-    case "close":
-      if (sender.isBroadcaster) {
-        queue_open = false;
-        respond("The queue is now closed!")
-      }
-      break;
-    case "add":
-      addLevel(sender, message, respond);
-      break;
-    default:
-      break;
+  if (Object.keys(dummyMapping).includes(command)) {
+    respond(dummyMapping[command](sender, args))
   }
 
   if (message == "!open" && sender.isBroadcaster) {
@@ -519,32 +528,4 @@ const chatbot_helper = chatbot.helper(
 chatbot_helper.setup(HandleMessage);
 chatbot_helper.connect();
 
-/**
- * @param {import("tmi.js").Userstate} sender
- * @param {string} message
- * @param {Function} respond
- */
-function addLevel(sender, message, respond) {
-  if (queue_open || sender.isBroadcaster) {
-    let level_code = get_remainder(message.toUpperCase());
-    if (settings.custom_codes_enabled) {
-      let customCodesMap = new Map(
-        JSON.parse(fs.readFileSync("./customCodes.json"))
-      );
-      let customNames = Array.from(customCodesMap.keys());
-      let customCodes = Array.from(customCodesMap.values());
-      let codeMatch = customNames
-        .map((a) => a.toUpperCase())
-        .indexOf(level_code);
-      if (codeMatch !== -1) {
-        level_code = customCodes[codeMatch];
-      }
-    }
-    respond(
-      quesoqueue.add(Level(level_code, sender.displayName, sender.username))
-    );
-  } else {
-    respond("Sorry, the queue is closed right now.");
-  }
-}
 
