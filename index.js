@@ -238,6 +238,7 @@ async function HandleMessage(message, sender, respond) {
   cmd = cmd.toLowerCase();
  
   // removes the bang at the beginning
+  if (!cmd.startsWith('!')) return
   let commandName = cmd.slice(1)
   const fallback = () => null
   const command = dummyMapping?.[aliases?.[commandName]] ?? fallback
