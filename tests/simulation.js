@@ -2,7 +2,8 @@
 
 // imports
 const jestChance = require('jest-chance');
-const { Volume } = require('memfs');
+const fs = require('fs');
+const { Volume, createFsFromVolume } = require('memfs');
 const path = require('path');
 
 // constants
@@ -57,9 +58,20 @@ const simSetChatters = (newChatters) => {
     mockChatters = newChatters;
 };
 
-const createMockFs = () => {
+const createMockVolume = (settings = undefined) => {
     const volume = new Volume();
     volume.mkdirSync(path.resolve('.'), { recursive: true });
+    // const locales = fs.readdirSync('./locales').filter(file => file.endsWith('.json'));
+    // copy locales
+    volume.fromJSON(
+        {
+            './locales/en.json': fs.readFileSync('./locales/en.json', 'utf8'),
+        },
+        path.resolve('.')
+    );
+    if (settings !== undefined) {
+        volume.fromJSON({'./settings.json': JSON.stringify(settings)}, path.resolve('.'));
+    }
     return volume;
 };
 
@@ -69,7 +81,8 @@ const createMockFs = () => {
 
 /**
  * @typedef index
- * @property {Volume} fs file system
+ * @property {Object} fs file system
+ * @property {Volume} volume mock volume
  * @property {settings} settings settings 
  * @property {Object} chatbot the chatbot mock
  * @property {Object} chatbot_helper the chatbot instance that `index.js` is using
@@ -86,7 +99,7 @@ const createMockFs = () => {
  * @param {number | Date} mockTime 
  * @returns {index} {@link index} 
  */
-function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime = undefined) {
+function simRequireIndex(volume = undefined, mockSettings = undefined, mockTime = undefined) {
     let fs;
     let settings;
     let chatbot;
@@ -117,24 +130,27 @@ function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime 
                     return chance.random();
                 });
 
-            // create virtual file system
-            if (mockFs === undefined) {
-                mockFs = createMockFs();
-            } else {
-                // copy files
-                const files = mockFs.toJSON();
-                mockFs = new Volume();
-                mockFs.fromJSON(files);
-            }
-            // setup virtual file system
-            jest.mock('fs', () => mockFs);
-            fs = require('fs');
-
-            // write settings.json file
+            // prepare settings
             if (mockSettings === undefined) {
                 mockSettings = DEFAULT_TEST_SETTINGS;
             }
-            mockFs.writeFileSync('./settings.json', JSON.stringify(mockSettings));
+
+            // create virtual file system
+            if (volume === undefined) {
+                volume = createMockVolume(mockSettings);
+            } else {
+                // copy files
+                const files = volume.toJSON();
+                volume = new Volume();
+                volume.fromJSON(files);
+                volume.fromJSON({'./settings.json': JSON.stringify(mockSettings)}, path.resolve('.'));
+            }
+
+            // setup virtual file system
+            const mockFs = createFsFromVolume(volume);
+            jest.mock('fs', () => mockFs);
+            fs = require('fs');
+
             // import settings
             settings = require('../settings.js');
 
@@ -170,6 +186,7 @@ function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime 
     } catch (err) {
         err.simIndex = {
             fs,
+            volume,
             settings,
             chatbot,
             chatbot_helper,
@@ -182,6 +199,7 @@ function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime 
 
     return {
         fs,
+        volume,
         settings,
         chatbot,
         chatbot_helper,
@@ -253,7 +271,7 @@ module.exports = {
     simSetTime,
     simSetChatters,
     buildChatter,
-    createMockFs,
+    createMockVolume,
     fetchMock: fetch,
     START_TIME,
     DEFAULT_TEST_SETTINGS,
