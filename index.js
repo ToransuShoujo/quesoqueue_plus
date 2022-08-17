@@ -64,6 +64,7 @@ const next_level_message = (level) => {
   if (level === undefined) {
     return "The queue is empty.";
   }
+  twitch.notLurkingAnymore(level.submitter); // If we pull up a level, we should reset the lurking status
   if (level.code == "R0M-HAK-LVL") {
     return "Now playing a ROMhack submitted by " + level.submitter + ".";
   } else {
@@ -77,6 +78,7 @@ const weighted_level_message = (level) => {
   if (level === undefined) {
     return "The queue is empty.";
   }
+  twitch.notLurkingAnymore(level.submitter); // If we pull up a level, we should reset the lurking status
   if (level.code == "R0M-HAK-LVL") {
     return (
       "Now playing a ROMhack submitted by " +
@@ -352,6 +354,7 @@ async function HandleMessage(message, sender, respond) {
     }
     var dip_level = quesoqueue.dip(username);
     if (dip_level !== undefined) {
+      twitch.notLurkingAnymore(username);
       if (dip_level.code == "R0M-HAK-LVL") {
         respond(
           "Now playing a ROMhack submitted by " + dip_level.submitter + "."
@@ -439,6 +442,7 @@ async function HandleMessage(message, sender, respond) {
     respond(`@${sender.displayName} ${response}`);
   } else if (message == "!clear" && sender.isBroadcaster) {
     quesoqueue.clear();
+    twitch.clearLurkers();
     respond("The queue has been cleared!");
   } else if (
     (message.startsWith("!customcode") || message == "!customcodes") &&
