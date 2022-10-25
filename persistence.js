@@ -3,10 +3,11 @@ const fs = require('fs');
 const gracefulFs = require("graceful-fs");
 const writeFileAtomic = require('write-file-atomic');
 const writeFileAtomicSync = writeFileAtomic.sync;
+const { Waiting } = require("./waiting.js");
 
 const FILENAME_V1 = { queso: './queso.save', userOnlineTime: './userOnlineTime.txt', userWaitTime: './userWaitTime.txt', waitingUsers: './waitingUsers.txt' };
 const FILENAME_V2 = { directory: './data', fileName: './data/queue.json' };
-const VERSION_V2 = '2.0';
+const VERSION_V2 = '2.1';
 const VERSION_CHECK_V2 = /^2(\.|$)/; // the version that is being accepted
 const CUSTOM_CODES_FILENAME = './customCodes.json';
 
@@ -44,6 +45,8 @@ const CUSTOM_CODES_FILENAME = './customCodes.json';
 //   waiting information has the following fields:
 //     - userId (optional): the twitch user id
 //     - waitTime: integer, the wait time in minutes
+//     - weightMin: integer, the weighted time for weighted random in minutes
+//     - weightMsec: integer, the milliseconds part of the weight time, between 0 (inclusive) and 59999 (inclusive)
 //     - lastOnlineTime: string, ISO 8601 timestamp
 
 const patchGlobalFs = () => {
@@ -143,10 +146,7 @@ const loadQueueV1 = () => {
     // note: the current level does not have a wait time!
     levels.forEach((level) => {
         if (!hasOwn(waiting, level.username)) {
-            waiting[level.username] = {
-                waitTime: 1,
-                lastOnlineTime: now,
-            };
+            waiting[level.username] = Waiting.create(now);
         }
     });
     return {
@@ -165,23 +165,9 @@ const waitingToObject = (waitingUsers, userWaitTime, userOnlineTime = undefined,
         const username = waitingUsers[index];
         const waitTime = userWaitTime[index];
         const lastOnlineTime = userOnlineTime === undefined ? now : userOnlineTime[index];
-        waiting[username] = {
-            waitTime,
-            lastOnlineTime
-        };
+        waiting[username] = Waiting.fromV1(waitTime, lastOnlineTime);
     }
     return waiting;
-};
-
-const waitingFromObject = (waiting) => {
-    const waitingUsers = Object.keys(waiting);
-    const userWaitTime = waitingUsers.map(username => waiting[username].waitTime);
-    const lastOnlineTime = waitingUsers.map(username => waiting[username].lastOnlineTime);
-    return {
-        waitingUsers,
-        userWaitTime,
-        lastOnlineTime
-    };
 };
 
 const loadQueueV2 = () => {
@@ -197,6 +183,9 @@ const loadQueueV2 = () => {
     if (state.currentLevel === null) {
         state.currentLevel = undefined;
     }
+    // convert waiting entries to Waiting objects
+    state.waiting = Object.fromEntries(Object.entries(state.waiting)
+        .map(([key, value]) => [key, Waiting.from(value)]));
     console.log(`${fileName} has been successfully validated.`);
     return state;
 };
@@ -278,11 +267,13 @@ const saveQueueSync = (currentLevel, queue, waiting) => {
 const saveQueue = async (currentLevel, queue, waiting, callback = undefined) => {
     try {
         await writeFileAtomic(FILENAME_V2.fileName, createSaveFileContent(currentLevel, queue, waiting), callback);
+        return true;
     } catch (err) {
         console.error('%s could not be saved. The queue will keep running, but the state is not persisted and might be lost on restart.', FILENAME_V2.fileName, err);
         // ignore this error and keep going
         // hopefully this issue is gone on the next save
         // or maybe even solved by the user while the queue keeps running, e.g. not enough space on disk
+        return false;
     }
 };
 
@@ -316,8 +307,6 @@ module.exports = {
     saveQueueSync,
     saveQueue,
     createDataDirectory,
-    waitingToObject,
-    waitingFromObject,
     loadCustomCodesSync,
     saveCustomCodesSync,
     patchGlobalFs,

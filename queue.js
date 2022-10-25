@@ -2,22 +2,54 @@ const settings = require('./settings.js');
 const twitch = require('./twitch.js').twitch();
 const { setIntervalAsync } = require('set-interval-async/dynamic');
 const persistence = require('./persistence.js');
+const { Waiting } = require('./waiting.js');
+const { username } = require('./settings.js');
 const standardBase30 = '0123456789abcdefghijklmnopqrst'
 const nintendoBase30 = '0123456789BCDFGHJKLMNPQRSTVWXY'
 const arbitraryXorValue = 377544828
 
+/**
+ * @typedef waiting
+ * @property {() => number} weight
+ * @property {(multiplier: number, now?: string)} addOneMinute
+ * 
+ * @typedef level
+ * @property {string} code
+ * @property {string} submitter
+ * @property {string} username
+ * 
+ * @typedef onlineOfflineList
+ * @property {level[]} online
+ * @property {level[]} offline
+ */
+
+/** @type {boolean} */
 var loaded = false;
-var current_level = undefined;
-var levels = new Array()
-var waitingUsers;
-var userWaitTime;
-var userOnlineTime;
+/** @type {(level | undefined)} */
+var current_level;
+/** @type {level[]} */
+var levels = [];
+/** @type {Object.<string, waiting>} */
+var waiting = {};
+/** @type {boolean} */
 var persist = true; // if false the queue will not save automatically
 
 const delim = '[-. ]?';
 const code = '[A-Ha-hJ-Nj-nP-Yp-y0-9]{3}';
 const codeStrict = '[A-Ha-hJ-Nj-nP-Yp-y0-9]{2}[fghFGH]';
 const levelCodeRegex = new RegExp(`(${code})${delim}(${code})${delim}(${codeStrict})`);
+
+/**
+ * @typedef weightedListEntry
+ * @property {level} level
+ * @property {() => number} weight
+ * @property {number} position
+ * 
+ * @typedef weightedList
+ * @property {number} totalWeight - 
+ * @property {weightedListEntry[]} entries - 
+ * @property {number} offlineLength - 
+ */
 
 // This function returns true if the course id given to it is a valid course id. The optional parameter dataIdThresHold
 // will make the function return false if the data id of the submitted level is greater than it.
@@ -124,39 +156,6 @@ const replaceCustomCode = (levelCode) => {
   return levelCode;
 };
 
-async function selectionchance(displayName, username) {
-  var list = await queue.list();
-  var online_users = list.online;
-
-  if (current_level === undefined) {
-    return 0;
-  }
-
-  var elegible_users = new Array();
-  for (let i = 0; i < online_users.length; i++) {
-    if (waitingUsers.includes(online_users[i].username)) {
-      elegible_users.push(online_users[i])
-    }
-  }
-  var elegible_users_time = new Array();
-  for (let i = 0; i < elegible_users.length; i++) {
-    elegible_users_time.push(userWaitTime[waitingUsers.indexOf(elegible_users[i].username)]);
-  }
-
-  var userIndex = waitingUsers.indexOf(current_level.username);
-  var userChance = userWaitTime[userIndex];
-  var totalOdds = elegible_users_time.reduce((a, b) => a + b, 0) + userChance;
-  var chance = (userChance / totalOdds * 100).toFixed(1);
-
-console.log("userWait time is " + userChance + " and the total odds are " + totalOdds);
-
-  if (chance > 100.0) {
-    return 100.0;
-  } else {
-    return chance;
-  }
-};
-
 const queue = {
   add: (level) => {
     if (settings.max_size && levels.length >= settings.max_size) {
@@ -175,11 +174,8 @@ const queue = {
     if (result == undefined || level.submitter == settings.channel) {
       levels.push(level);
       // add wait time of 1 and add last online time of now
-      if (!waitingUsers.includes(level.username)) {
-        const now = (new Date()).toISOString();
-        waitingUsers.push(level.username);
-        userWaitTime.push(1);
-        userOnlineTime.push(now);
+      if (!Object.prototype.hasOwnProperty.call(waiting, level.username)) {
+        waiting[level.username] = Waiting.create();
       }
       queue.save();
       if (level.code == 'R0M-HAK-LVL') {
@@ -243,31 +239,54 @@ const queue = {
     }
   },
 
-  position: async (username) => {
-    if (current_level != undefined && current_level.submitter == username) {
+  /** @type {(username: string, list?: onlineOfflineList) => Promise<number>} */
+  position: async (username, list = undefined) => {
+    if (current_level != undefined && current_level.username == username) {
       return 0;
     }
     if (levels.length == 0) {
       return -1;
     }
 
-    var list = await queue.list();
+    if (list === undefined) {
+      list = await queue.list();
+    }
     var both = list.online.concat(list.offline);
-    var index = both.findIndex(x => x.submitter == username);
+    var index = both.findIndex(x => x.username == username);
     if (index != -1) {
       return (index + 1) + ((current_level != undefined) ? 1 : 0);
     }
     return -1;
   },
 
-  absoluteposition: async (username) => {
-    if (current_level != undefined && current_level.submitter == username) {
+  /** @type {(username: string) => Promise<number>} */
+  absolutePosition: async (username) => {
+    if (current_level != undefined && current_level.username == username) {
       return 0;
     }
     if (levels.length == 0) {
       return -1;
     }
-    var index = levels.findIndex(x => x.submitter == username);
+    var index = levels.findIndex(x => x.username == username);
+    if (index != -1) {
+      return (index + 1) + ((current_level != undefined) ? 1 : 0);
+    }
+    return -1;
+  },
+
+  /** @type {(username: string, list?: onlineOfflineList) => Promise<number>} */
+  weightedPosition: async (username, list = undefined) => {
+    if (current_level != undefined && current_level.username == username) {
+      return 0;
+    }
+    if (levels.length == 0) {
+      return -1;
+    }
+    if (twitch.checkLurk(username)) {
+      return -2;
+    }
+    const weightedList = await queue.weightedList(true, list);
+    const index = weightedList.entries.findIndex(x => x.level.username == username);
     if (index != -1) {
       return (index + 1) + ((current_level != undefined) ? 1 : 0);
     }
@@ -289,11 +308,6 @@ const queue = {
   },
 
   weightedchance: async (displayName, username) => {
-    var list = await queue.list();
-    var online_users = list.online;
-    var both = list.online.concat(list.offline);
-    var index = both.findIndex(x => x.username == username);
-
     if (current_level != undefined && current_level.submitter == displayName) {
       return 0;
     }
@@ -304,29 +318,21 @@ const queue = {
       return -2;
     }
 
-    var elegible_users = new Array();
-    for (let i = 0; i < online_users.length; i++) {
-      if (waitingUsers.includes(online_users[i].username)) {
-        elegible_users.push(online_users[i])
-      }
-    }
-    var elegible_users_time = new Array();
-    for (let i = 0; i < elegible_users.length; i++) {
-      elegible_users_time.push(userWaitTime[waitingUsers.indexOf(elegible_users[i].username)]);
+    const weightedList = await queue.weightedList(false);
+
+    if (weightedList.entries.length == 0) {
+      return -1;
     }
 
+    const index = weightedList.entries.findIndex(entry => entry.level.username == username);
+
     if (index != -1) {
-      let stringElegibleUsers = "";
-      for (let i = 0; i < elegible_users.length; i++) {
-        stringElegibleUsers = stringElegibleUsers + elegible_users[i].username + ", ";
-      }
-      console.log('Elegible users: ' + stringElegibleUsers);
-      console.log('Elegible users time: ' + elegible_users_time);
-      var userIndex = waitingUsers.indexOf(username);
-      var userChance = userWaitTime[userIndex];
-      var totalOdds = elegible_users_time.reduce((a, b) => a + b, 0);
-      console.log(`The userChance is ${userChance} with totalOdds ${totalOdds}`);
-      return (userChance / totalOdds * 100).toFixed(1);
+      console.log('Elegible users: ' + weightedList.entries.map(entry => entry.level.username).reduce((a, b) => a + ", " + b));
+      console.log("Elegible users time: " + weightedList.entries.map(entry => entry.weight()));
+      const weight = weightedList.entries[index].weight();
+      const totalWeight = weightedList.totalWeight;
+      console.log(`${displayName}'s weight is ${weight} with totalWeight ${totalWeight}`);
+      return queue.percent(weight, totalWeight);
     }
     return -1;
   },
@@ -357,6 +363,7 @@ const queue = {
     var both = list.online.concat(list.offline);
     if (both.length === 0) {
       current_level = undefined;
+      queue.save();
       return current_level;
     } else {
       current_level = both.shift();
@@ -411,11 +418,8 @@ const queue = {
   },
 
   removeWaiting: () => {
-    chosenUserOverallIndex = waitingUsers.indexOf(current_level.username);
-    if (chosenUserOverallIndex != -1) {
-      waitingUsers.splice(chosenUserOverallIndex, 1);
-      userWaitTime.splice(chosenUserOverallIndex, 1);
-      userOnlineTime.splice(chosenUserOverallIndex, 1);
+    if (Object.prototype.hasOwnProperty.call(waiting, current_level.username)) {
+      delete waiting[current_level.username];
     }
   },
 
@@ -430,6 +434,7 @@ const queue = {
       eligible_levels = list.offline;
       if (eligible_levels.length == 0) {
         current_level = undefined;
+        queue.save();
         return current_level;
       }
     }
@@ -450,6 +455,7 @@ const queue = {
       eligible_levels = list.offline;
       if (eligible_levels.length == 0) {
         current_level = undefined;
+        queue.save();
         return current_level;
       }
     }
@@ -470,6 +476,7 @@ const queue = {
       eligible_levels = list.offline;
       if (eligible_levels.length == 0) {
         current_level = undefined;
+        queue.save();
         return current_level;
       }
     }
@@ -483,60 +490,126 @@ const queue = {
     return current_level;
   },
 
-  weightedrandom: async () => {
-    var list = await queue.list();
-    var online_users = list.online;
-    if (online_users.length == 0 || waitingUsers.length == 0) {
+  weightedrandom: async (list = undefined) => {
+    const weightedList = await queue.weightedList(false, list);
+
+    if (weightedList.entries.length == 0) {
       current_level = undefined;
+      queue.save();
       return current_level;
     }
-    var elegible_users = new Array();
-    for (let i = 0; i < online_users.length; i++) {
-      if (waitingUsers.includes(online_users[i].username)) {
-        elegible_users.push(online_users[i])
-      }
-    }
-    if (elegible_users.length == 0) {
-      current_level = undefined;
-      return current_level;
-    }
-    var elegible_users_time = new Array();
-    for (let i = 0; i < elegible_users.length; i++) {
-      elegible_users_time.push(userWaitTime[waitingUsers.indexOf(elegible_users[i].username)]);
-    }
 
-    var totalOdds = elegible_users_time.reduce((a, b) => a + b, 0);
-    var randomNumber = Math.floor(Math.random() * totalOdds) + 1;
-    var levelIndex = 0;
-    var gettingThereSomeday = elegible_users_time[0];
-    console.log("Elegible users time: " + elegible_users_time);
+    const totalWeight = weightedList.totalWeight;
+    const randomNumber = Math.floor(Math.random() * totalWeight) + 1;
+    let levelIndex = 0;
+    let gettingThereSomeday = weightedList.entries[0].weight();
 
+    console.log('Elegible users: ' + weightedList.entries.map(entry => entry.level.username).reduce((a, b) => a + ", " + b));
+    console.log("Elegible users time: " + weightedList.entries.map(entry => entry.weight()));
+
+    console.log("Random number: " + randomNumber);
+    console.log("Current cumulative time: " + gettingThereSomeday);
     while (gettingThereSomeday < randomNumber) {
       levelIndex++;
-      gettingThereSomeday = gettingThereSomeday + elegible_users_time[levelIndex];
-      console.log("Random number: " + randomNumber);
+      gettingThereSomeday = gettingThereSomeday + weightedList.entries[levelIndex].weight();
       console.log("Current cumulative time: " + gettingThereSomeday);
     }
 
     console.log("Chosen index was " + levelIndex + " after a cumulative time of " + gettingThereSomeday);
-    current_level = elegible_users[levelIndex];
+    current_level = weightedList.entries[levelIndex].level;
 
-    var index = levels.findIndex(x => x.username == current_level.username);
+    const index = levels.findIndex(x => x.username == current_level.username);
     levels.splice(index, 1);
+
+    const selectionChance = queue.percent(weightedList.entries[levelIndex].weight(), totalWeight);
+
+    queue.removeWaiting();
     queue.save();
-
-    let selectionChance = await selectionchance(current_level.username, current_level.submitter);
-
-    chosenUser = elegible_users[levelIndex].username;
-    chosenUserOverallIndex = waitingUsers.indexOf(chosenUser);
-    if (chosenUserOverallIndex != -1) {
-      waitingUsers.splice(chosenUserOverallIndex, 1);
-      userWaitTime.splice(chosenUserOverallIndex, 1);
-    }
 
     return { ...current_level, selectionChance };
   },
 
+  /** @type {(sorted?: boolean, list?: onlineOfflineList) => Promise<weightedList>} */
+  weightedList: async (sorted = undefined, list = undefined) => {
+    if (list === undefined) {
+      list = await queue.list();
+    }
+    const online_users = list.online;
+    if (online_users.length == 0 || Object.keys(waiting).length == 0) {
+      return { totalWeight: 0, entries: [], offlineLength: list.offline.length + online_users.length };
+    }
+
+    let entries = online_users
+      .filter(level => Object.prototype.hasOwnProperty.call(waiting, level.username))
+      .map((level, position) => { return { weight: () => waiting[level.username].weight(), position: position, level: level }; });
+
+    if (sorted === undefined || sorted) {
+      entries = entries.sort((a, b) => b.weight() - a.weight() || a.position - b.position);
+    }
+    
+    const totalWeight = entries.reduce((sum, entry) => sum + entry.weight(), 0);
+  
+    return { totalWeight: totalWeight, entries: entries, offlineLength: list.offline.length + (online_users.length - entries.length) };
+  },
+
+  percent: (weight, totalWeight) => {
+    let percent = weight / totalWeight * 100.0;
+    if (percent > 100.0) {
+      percent = 100.0;
+    } else if (isNaN(percent) || percent < 0.0) {
+      percent = 0.0;
+    }
+    const percentString = (percent).toFixed(1);
+    if (percentString === '100.0' && weight != totalWeight) {
+      return '>99.9';
+    }
+    if (percentString === '0.0' && weight != 0) {
+      return '<0.1';
+    }
+    return percentString;
+  },
+
+  multiplier: (username) => {
+    if (settings.subscriberWeightMultiplier && twitch.isSubscriber(username)) {
+      return settings.subscriberWeightMultiplier;
+    }
+    return 1.0;
+  },
+
+  weightednext: async (list = undefined) => {
+    const weightedList = await queue.weightedList(true, list);
+
+    if (weightedList.entries.length == 0) {
+      current_level = undefined;
+      queue.save();
+      return current_level;
+    }
+    
+    current_level = weightedList.entries[0].level;
+
+    // index of the level can be different than 0
+    const index = levels.findIndex(x => x.username == current_level.username);
+    levels.splice(index, 1);
+
+    let selectionChance = queue.percent(weightedList.entries[0].weight(), weightedList.totalWeight);
+
+    queue.removeWaiting();
+    queue.save();
+
+    return { ...current_level, selectionChance };
+  },
+
+  weightedsubrandom: async () => {
+    const list = await queue.sublist();
+    return await queue.weightedrandom(list);
+  },
+
+  weightedsubnext: async () => {
+    const list = await queue.sublist();
+    return await queue.weightednext(list);
+  },
+
+  /** @type {() => Promise<onlineOfflineList> } */
   list: async () => {
     var online = new Array();
     var offline = new Array();
@@ -656,15 +729,21 @@ const queue = {
   save: (options = {}) => {
     options = { force: false, ...options };
     if (persist || options.force) {
-      return persistence.saveQueueSync(current_level, levels, persistence.waitingToObject(waitingUsers, userWaitTime, userOnlineTime));
+      return persistence.saveQueueSync(current_level, levels, waiting);
     } else {
       return false;
     }
   },
 
   // TODO: could be used instead of the sync variant
+  //       mixing sync and async might not be a good idea
   // saveAsync: async () => {
-  //   await persistence.saveQueue(current_level, levels, persistence.waitingToObject(waitingUsers, userWaitTime, userOnlineTime));
+  //   options = { force: false, ...options };
+  //   if (persist || options.force) {
+  //     return await persistence.saveQueue(current_level, levels, waiting);
+  //   } else {
+  //     return false;
+  //   }
   // },
 
   isPersisting: () => {
@@ -676,10 +755,7 @@ const queue = {
     current_level = state.currentLevel;
     levels = state.queue;
     // split waiting map into lists
-    const waitingLists = persistence.waitingFromObject(state.waiting);
-    waitingUsers = waitingLists.waitingUsers;
-    userWaitTime = waitingLists.userWaitTime;
-    userOnlineTime = waitingLists.lastOnlineTime;
+    waiting = state.waiting;
   },
 
   loadCustomCodes: () => {
@@ -721,17 +797,13 @@ const queue = {
   waitingTimerTick: async () => {
     var list = await queue.list();
     const now = (new Date()).toISOString();
-    for (let i = 0; i < list.online.length; i++) {
-      if (!waitingUsers.includes(list.online[i].username)) {
-        waitingUsers.push(list.online[i].username);
-        userWaitTime.push(1);
-        userOnlineTime.push(now);
+    list.online.map(v => v.username).forEach(username => {
+      if (Object.prototype.hasOwnProperty.call(waiting, username)) {
+        waiting[username].addOneMinute(queue.multiplier(username), now);
       } else {
-        let userIndex = waitingUsers.indexOf(list.online[i].username);
-        userWaitTime[userIndex] = userWaitTime[userIndex] + 1;
-        userOnlineTime[userIndex] = now;
+        waiting[username] = Waiting.create(now);
       }
-    }
+    });
     queue.save();
     // TODO: use this instead?
     // await queue.saveAsync();

@@ -2,7 +2,7 @@
 
 // imports
 const jestChance = require('jest-chance');
-const { Volume } = require('memfs');
+const { Volume, createFsFromVolume } = require('memfs');
 const path = require('path');
 
 // constants
@@ -32,8 +32,58 @@ var mockChatters = EMPTY_CHATTERS;
 jest.mock('../chatbot.js');
 jest.mock('node-fetch', () => jest.fn());
 
+jest.mock('set-interval-async/dynamic', () => {
+    const dynamic = jest.requireActual('set-interval-async/dynamic');
+    return {
+        setIntervalAsync: (handler, interval, ...args) => {
+            if (this.asyncTimers === undefined) {
+                this.asyncTimers = [];
+            }
+            const timer = dynamic.setIntervalAsync(handler, interval, ...args);
+            this.asyncTimers.push(timer);
+            return timer;
+        },
+        clearIntervalAsync: async (timer) => {
+            if (this.asyncTimers === undefined) {
+                this.asyncTimers = [];
+            }
+            const index = this.asyncTimers.findIndex(t => t === timer);
+            if (index != -1) {
+                this.asyncTimers.splice(index, 1);
+                await dynamic.clearIntervalAsync(timer);
+            }
+        },
+        flushPromises: async () => {
+            await new Promise(jest.requireActual("timers").setImmediate);
+            if (this.asyncTimers === undefined) {
+                this.asyncTimers = [];
+            }
+            // TODO: maybe this is not a good idea since 
+            for (const t of this.asyncTimers) {
+                for (const iterationId in t.promises) {
+                    try {
+                        await t.promises[iterationId];
+                    } catch (_) {
+                        // Do nothing.
+                    }
+                }
+            }
+        },
+        clearAllTimers: async () => {
+            if (this.asyncTimers === undefined) {
+                this.asyncTimers = [];
+            }
+            while (this.asyncTimers.length) {
+                const t = this.asyncTimers.pop();
+                await dynamic.clearIntervalAsync(t);
+            }
+        },
+    };
+});
+
 // only import after mocking!
 const fetch = require("node-fetch");
+const dynamic = require('set-interval-async/dynamic');
 
 // mock fetch
 fetch.mockImplementation(() =>
@@ -54,12 +104,21 @@ const simSetChatters = (newChatters) => {
             chatters: newChatters
         };
     }
+    ['broadcaster', 'vips', 'moderators', 'staff', 'admins', 'global_mods', 'viewers'].forEach(key => {
+        if (!Object.hasOwnProperty.call(newChatters.chatters, key)) {
+            newChatters.chatters[key] = [];
+        }
+    });
     mockChatters = newChatters;
+    return mockChatters;
 };
 
-const createMockFs = () => {
+const createMockVolume = (settings = undefined) => {
     const volume = new Volume();
     volume.mkdirSync(path.resolve('.'), { recursive: true });
+    if (settings !== undefined) {
+        volume.fromJSON({'./settings.json': JSON.stringify(settings)}, path.resolve('.'));
+    }
     return volume;
 };
 
@@ -69,7 +128,8 @@ const createMockFs = () => {
 
 /**
  * @typedef index
- * @property {Volume} fs file system
+ * @property {Object} fs file system
+ * @property {Volume} volume mock volume
  * @property {settings} settings settings 
  * @property {Object} chatbot the chatbot mock
  * @property {Object} chatbot_helper the chatbot instance that `index.js` is using
@@ -86,7 +146,7 @@ const createMockFs = () => {
  * @param {number | Date} mockTime 
  * @returns {index} {@link index} 
  */
-function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime = undefined) {
+const simRequireIndex = (volume = undefined, mockSettings = undefined, mockTime = undefined) => {
     let fs;
     let settings;
     let chatbot;
@@ -94,9 +154,11 @@ function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime 
     let random;
     let quesoqueue;
     let handle_func;
+    let twitch;
 
     try {
         jest.isolateModules(() => {
+
             // remove timers
             jest.clearAllTimers();
 
@@ -117,29 +179,33 @@ function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime 
                     return chance.random();
                 });
 
-            // create virtual file system
-            if (mockFs === undefined) {
-                mockFs = createMockFs();
-            } else {
-                // copy files
-                const files = mockFs.toJSON();
-                mockFs = new Volume();
-                mockFs.fromJSON(files);
-            }
-            // setup virtual file system
-            jest.mock('fs', () => mockFs);
-            fs = require('fs');
-
-            // write settings.json file
+            // prepare settings
             if (mockSettings === undefined) {
                 mockSettings = DEFAULT_TEST_SETTINGS;
             }
-            mockFs.writeFileSync('./settings.json', JSON.stringify(mockSettings));
+
+            // create virtual file system
+            if (volume === undefined) {
+                volume = createMockVolume(mockSettings);
+            } else {
+                // copy files
+                const files = volume.toJSON();
+                volume = new Volume();
+                volume.fromJSON(files);
+                volume.fromJSON({'./settings.json': JSON.stringify(mockSettings)}, path.resolve('.'));
+            }
+
+            // setup virtual file system
+            const mockFs = createFsFromVolume(volume);
+            jest.mock('fs', () => mockFs);
+            fs = require('fs');
+
             // import settings
             settings = require('../settings.js');
 
             // import libraries
             chatbot = require('../chatbot.js');
+            twitch = require('../twitch.js').twitch();
             const queue = require('../queue.js');
 
             // spy on the quesoqueue that index will use
@@ -157,7 +223,7 @@ function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime 
             expect(chatbot.helper).toHaveBeenCalledTimes(1);
             chatbot_helper = chatbot.helper.mock.results[0].value;
 
-            expect(chatbot_helper.setup).toHaveBeenCalledTimes(1)
+            expect(chatbot_helper.setup).toHaveBeenCalledTimes(1);
             expect(chatbot_helper.connect).toHaveBeenCalledTimes(1);
             expect(chatbot_helper.setup).toHaveBeenCalledTimes(1);
             expect(chatbot_helper.say).toHaveBeenCalledTimes(0);
@@ -170,29 +236,38 @@ function simRequireIndex(mockFs = undefined, mockSettings = undefined, mockTime 
     } catch (err) {
         err.simIndex = {
             fs,
+            volume,
             settings,
             chatbot,
             chatbot_helper,
             random,
             quesoqueue,
             handle_func,
+            twitch,
         };
         throw err;
     }
 
     return {
         fs,
+        volume,
         settings,
         chatbot,
         chatbot_helper,
         random,
         quesoqueue,
         handle_func,
+        twitch,
     };
 };
 
-const flushPromises = () => {
-    return new Promise(jest.requireActual("timers").setImmediate);
+const flushPromises = async () => {
+    await dynamic.flushPromises();
+};
+
+const clearAllTimers = async () => {
+    jest.clearAllTimers();
+    await dynamic.clearAllTimers();
 };
 
 /**
@@ -203,6 +278,9 @@ const flushPromises = () => {
  * @param {number} accuracy How accurate timers are being simulated, in milliseconds
  */
 const simAdvanceTime = async (ms, accuracy = 0) => {
+    
+    await flushPromises();
+
     // advance by accuracy intervals
     if (accuracy > 0) {
         for (let i = 0; i < ms; i += accuracy) {
@@ -220,19 +298,24 @@ const simAdvanceTime = async (ms, accuracy = 0) => {
  * Sets the time to the given time and adds a day in case time would have gone backwards.
  * Also runs timers and waits for async timers to run.
  * 
- * @param {string} time Time in the format `HH:mm:ss` in UTC.
+ * @param {string|Date} time Time in the format `HH:mm:ss` in UTC or a Date.
  * @param {number} accuracy How accurate timers are being simulated, in milliseconds
  */
 const simSetTime = async (time, accuracy = 0) => {
     const prevTime = new Date();
-    const newTime = new Date();
-    const timeArray = time.split(':').map(x => parseInt(x, 10));
-    newTime.setUTCHours(timeArray[0]);
-    newTime.setUTCMinutes(timeArray[1]);
-    newTime.setUTCSeconds(timeArray[2]);
-    if (newTime < prevTime) {
-        // add one day in case of time going backwards
-        newTime.setUTCDate(newTime.getUTCDate() + 1);
+    let newTime;
+    if (time instanceof Date) {
+        newTime = time;
+    } else {
+        newTime = new Date();
+        const timeArray = time.split(':').map(x => parseInt(x, 10));
+        newTime.setUTCHours(timeArray[0]);
+        newTime.setUTCMinutes(timeArray[1]);
+        newTime.setUTCSeconds(timeArray[2]);
+        if (newTime < prevTime) {
+            // add one day in case of time going backwards
+            newTime.setUTCDate(newTime.getUTCDate() + 1);
+        }
     }
     const diff = newTime - prevTime;
     if (diff > 0) {
@@ -241,11 +324,26 @@ const simSetTime = async (time, accuracy = 0) => {
         // should not happen
         throw Error(`Time went backwards, from ${prevTime} to ${newTime} (${time})`);
     }
-}
+};
 
-const buildChatter = function (username, displayName, isSubscriber, isMod, isBroadcaster) {
+const buildChatter = (username, displayName, isSubscriber, isMod, isBroadcaster) => {
     return { username, displayName, isSubscriber, isMod, isBroadcaster };
-}
+};
+
+const replace = (settings, newSettings) => {
+    Object.keys(settings).forEach(key => { delete settings[key]; });
+    Object.assign(settings, newSettings);
+};
+
+const newLevel = (level_code, submitterOrUser, username = undefined) => {
+    if (typeof submitterOrUser === 'string' && typeof username === 'string') {
+        return { code: level_code, submitter: submitterOrUser, username: username };
+    } else if (typeof submitterOrUser === 'object' && username === undefined) {
+        return { code: level_code, submitter: submitterOrUser.displayName, username: submitterOrUser.username };
+    } else {
+        throw new Error(`newLevel called with invalid arguments: submitterOrUser=${submitterOrUser}, username=${username}`);
+    }
+  };
 
 module.exports = {
     simRequireIndex,
@@ -253,7 +351,11 @@ module.exports = {
     simSetTime,
     simSetChatters,
     buildChatter,
-    createMockFs,
+    createMockVolume,
+    replace,
+    newLevel,
+    flushPromises,
+    clearAllTimers,
     fetchMock: fetch,
     START_TIME,
     DEFAULT_TEST_SETTINGS,
