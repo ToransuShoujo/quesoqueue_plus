@@ -384,7 +384,6 @@ async function HandleMessage(message, sender, respond) {
     }
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     if (selection_mode == "weightedrandom") {
       respond("(" + selection_mode + ") " + weightedrandom_level_message(next_level));
@@ -400,28 +399,24 @@ async function HandleMessage(message, sender, respond) {
   } else if (message == "!next" && sender.isBroadcaster) {
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     let next_level = await quesoqueue.next();
     respond(next_level_message(next_level));
   } else if (message == "!subnext" && sender.isBroadcaster) {
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     let next_level = await quesoqueue.subnext();
     respond(next_level_message(next_level));
   } else if (message == "!modnext" && sender.isBroadcaster) {
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     let next_level = await quesoqueue.modnext();
     respond(next_level_message(next_level));
   } else if (message == "!random" && sender.isBroadcaster) {
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     let next_level = await quesoqueue.random();
     respond(next_level_message(next_level));
@@ -435,7 +430,6 @@ async function HandleMessage(message, sender, respond) {
   } else if (message == "!weightedrandom" && sender.isBroadcaster) {
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     let next_level = await quesoqueue.weightedrandom();
     respond(weightedrandom_level_message(next_level));
@@ -456,20 +450,17 @@ async function HandleMessage(message, sender, respond) {
   } else if (message == "!subrandom" && sender.isBroadcaster) {
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     let next_level = await quesoqueue.subrandom();
     respond(next_level_message(next_level));
   } else if (message == "!modrandom" && sender.isBroadcaster) {
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     let next_level = await quesoqueue.modrandom();
     respond(next_level_message(next_level));
   } else if (message == "!punt" && sender.isBroadcaster) {
     if (settings.level_timeout) {
-      level_timer.restart();
       level_timer.pause();
     }
     respond(await quesoqueue.punt());
@@ -480,7 +471,6 @@ async function HandleMessage(message, sender, respond) {
     sender.isBroadcaster
   ) {
     if (settings.level_timeout) {
-      level_timer.restart();
       level_timer.pause();
     }
     respond(await quesoqueue.dismiss());
@@ -488,7 +478,6 @@ async function HandleMessage(message, sender, respond) {
     var username = get_remainder(message);
     if (settings.level_timeout) {
       level_timer.restart();
-      level_timer.pause();
     }
     var dip_level = quesoqueue.dip(username);
     if (dip_level !== undefined) {
