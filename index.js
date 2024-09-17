@@ -10,6 +10,37 @@ persistence.patchGlobalFs();
 persistence.createDataDirectory();
 quesoqueue.load();
 
+/** @type {import("./commandTypes.js").commandMapping} */
+const dummyMapping = {}
+dummyMapping['add'] = addLevel
+/** @type {{[twitchCommand: string]: string}} */
+const aliases = {
+  push: 'add',
+  add: 'add'
+}
+
+/**
+ * @param {import("tmi.js").Userstate} sender
+ * @param {(message: string) => void} respond
+ * @param {string[]} args
+ */
+function addLevel(sender, respond, args) {
+  if (queue_open || sender.isBroadcaster) {
+    let [level_code] = args.map(el => el.toUpperCase())
+    if (settings.custom_codes_enabled) {
+      let customCodesMap = new Map(
+        JSON.parse(fs.readFileSync("./customCodes.json", 'utf8'))
+      );
+      if (customCodesMap.has(level_code)) {
+        level_code = customCodesMap.get(level_code)
+      }
+    }
+    respond(quesoqueue.add(Level(level_code, sender.displayName, sender.username)))
+  } else {
+    respond("Sorry, the queue is closed right now.")
+  }
+}
+
 var queue_open = settings.start_open;
 var selection_iter = 0;
 let level_timer;
@@ -295,6 +326,11 @@ const submitted_message = async (level, sender) => {
 // `message` is the full text of the message. `sender` is the username
 // of the person that sent the message.
 
+/**
+ * @param {string} message
+ * @param {import("tmi.js").Userstate} sender
+ * @param {(message: string) => void} respond
+ */
 async function HandleMessage(message, sender, respond) {
   if (sender.username === undefined || message === undefined) {
     console.log("undefined data");
@@ -304,13 +340,13 @@ async function HandleMessage(message, sender, respond) {
   let args = message.split(" ");
   let cmd = args.shift();
   cmd = cmd.toLowerCase();
-  args = args.join(" ");
-  message = cmd + args;
-  if (args.length == 0) {
-    message = cmd;
-  } else {
-    message = cmd + " " + args;
-  }
+ 
+  // removes the bang at the beginning
+  if (!cmd.startsWith('!')) return
+  let commandName = cmd.slice(1)
+  const fallback = () => null
+  const command = dummyMapping?.[aliases?.[commandName]] ?? fallback
+  command(sender, respond, args)
 
   if (message == "!open" && sender.isBroadcaster) {
     queue_open = true;
@@ -643,3 +679,5 @@ const chatbot_helper = chatbot.helper(
 );
 chatbot_helper.setup(HandleMessage);
 chatbot_helper.connect();
+
+
